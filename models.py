@@ -1,38 +1,27 @@
-# models.py
-import heapq
 from db_connection import connect_db
 
 class User:
-    """
-    Represents a User in the system. Manages user registration and login with caching.
-    """
     user_cache = {}  # In-memory cache for users
 
-    def __init__(self, user_id, name, email, password, is_admin=False):
+    def __init__(self, user_id, name, email, password, role='staff'):
         self.id = user_id
         self.name = name
         self.email = email
         self.password = password
-        self.is_admin = is_admin
+        self.role = role
 
     @staticmethod
-    def register_user(name, email, password, is_admin=False):
-        """
-        Registers a new user and stores them in the database and cache.
-        """
+    def register_user(name, email, password, role='staff'):
         connection = connect_db()
         if connection:
             try:
                 cursor = connection.cursor()
                 cursor.execute("""
-                    INSERT INTO users (name, email, password, is_admin)
+                    INSERT INTO users (name, email, password, role)
                     VALUES (%s, %s, %s, %s)
-                """, (name, email, password, is_admin))
+                """, (name, email, password, role))
                 connection.commit()
-                cursor.execute("SELECT * FROM users WHERE email = %s", (email,))
-                user = cursor.fetchone()
-                User.user_cache[user[0]] = user  # Cache user
-                print(f"User {name} registered and cached.")
+                print(f"User {name} registered successfully with role {role}.")
             except mysql.connector.Error as err:
                 print(f"Error registering user: {err}")
             finally:
@@ -40,16 +29,6 @@ class User:
 
     @staticmethod
     def login(email, password):
-        """
-        Handles user login by first checking the cache and then querying the database.
-        """
-        # Check the cache first
-        for user in User.user_cache.values():
-            if user[2] == email and user[3] == password:
-                print(f"Welcome, {user[1]}! (from cache)")
-                return user
-
-        # Check the database if not in cache
         connection = connect_db()
         if connection:
             try:
@@ -57,127 +36,98 @@ class User:
                 cursor.execute("SELECT * FROM users WHERE email = %s AND password = %s", (email, password))
                 user = cursor.fetchone()
                 if user:
-                    print(f"Welcome, {user[1]}!")
-                    User.user_cache[user[0]] = user  # Cache user for future use
-                    return user
+                    print(f"Welcome, {user[1]}!")  # Greet the user
+                    return User(user[0], user[1], user[2], user[3], user[4])  # Return the user object with details
                 else:
-                    print("Incorrect email or password.")
+                    print("Invalid email or password.")
             except mysql.connector.Error as err:
                 print(f"Error during login: {err}")
             finally:
                 connection.close()
         return None
-
-
 class Room:
-    """
-    Represents a Room in the hotel.
-    """
     def __init__(self, number, room_type, price, available=True):
         self.number = number
         self.room_type = room_type
         self.price = price
         self.available = available
 
-    def __lt__(self, other):
-        """
-        Comparison method for sorting rooms by price.
-        """
-        return self.price < other.price
-
-
 class RoomManager:
-    """
-    Manages rooms with a heap (min-heap) for efficient price-based retrieval.
-    """
     def __init__(self):
-        self.rooms = []  # List of all rooms
-        self.room_heap = []  # Min-heap for room prices
+        self.rooms = []
 
     def load_rooms(self):
-        """
-        Loads rooms from the database into the list and heap.
-        """
         connection = connect_db()
         if connection:
             try:
                 cursor = connection.cursor()
-                cursor.execute("SELECT * FROM rooms WHERE available = TRUE ORDER BY number")
+                cursor.execute("SELECT * FROM rooms")
                 room_data = cursor.fetchall()
-                for room in room_data:
-                    room_obj = Room(room[1], room[2], room[3], room[4])
-                    self.rooms.append(room_obj)
-                    heapq.heappush(self.room_heap, room_obj)  # Push to heap based on price
+                self.rooms = [Room(r[1], r[2], r[3], r[4]) for r in room_data]
             except mysql.connector.Error as err:
-                print(f"Error fetching rooms: {err}")
+                print(f"Error loading rooms: {err}")
             finally:
                 connection.close()
 
-    def find_cheapest_room(self):
-        """
-        Returns the cheapest room using the heap.
-        """
-        if self.room_heap:
-            return heapq.heappop(self.room_heap)  # Return and remove the cheapest room
-        return None
+    def add_room(self, room):
+        connection = connect_db()
+        if connection:
+            try:
+                cursor = connection.cursor()
+                cursor.execute("""
+                    INSERT INTO rooms (number, room_type, price, available)
+                    VALUES (%s, %s, %s, %s)
+                """, (room.number, room.room_type, room.price, room.available))
+                connection.commit()
+                print(f"Room {room.number} added.")
+            except mysql.connector.Error as err:
+                print(f"Error adding room: {err}")
+            finally:
+                connection.close()
 
-    def find_room_by_number(self, number):
-        """
-        Finds a room by its number using a simple search.
-        """
+    def delete_room(self, room_number):
+        connection = connect_db()
+        if connection:
+            try:
+                cursor = connection.cursor()
+                cursor.execute("DELETE FROM rooms WHERE number = %s", (room_number,))
+                connection.commit()
+                print(f"Room {room_number} deleted.")
+            except mysql.connector.Error as err:
+                print(f"Error deleting room: {err}")
+            finally:
+                connection.close()
+
+    def view_rooms(self):
         for room in self.rooms:
-            if room.number == number:
-                return room
-        return None
+            print(f"Room {room.number}, Type: {room.room_type}, Price: {room.price}")
+import heapq
 
+class Task:
+    def __init__(self, task_name, priority, assigned_staff=None):
+        self.task_name = task_name
+        self.priority = priority
+        self.assigned_staff = assigned_staff
 
-class HotelGraph:
-    """
-    A graph where nodes represent hotel locations and edges represent routes between them.
-    Uses Dijkstra's Algorithm to find the shortest path between locations.
-    """
+    def __lt__(self, other):
+        return self.priority < other.priority  # Compare tasks based on priority
+
+class TaskScheduler:
     def __init__(self):
-        self.graph = {}  # Dictionary of hotel locations and routes
+        self.tasks = []
 
-    def add_location(self, hotel_name):
-        """
-        Adds a hotel location to the graph.
-        """
-        if hotel_name not in self.graph:
-            self.graph[hotel_name] = []
+    def add_task(self, task):
+        heapq.heappush(self.tasks, task)
+        print(f"Task '{task.task_name}' added to the schedule with priority {task.priority}.")
 
-    def add_route(self, hotel_from, hotel_to, cost):
-        """
-        Adds a route between two hotels with a cost (distance or time).
-        """
-        self.graph[hotel_from].append((hotel_to, cost))
-        self.graph[hotel_to].append((hotel_from, cost))  # Undirected route
+    def assign_task(self, staff_member):
+        if self.tasks:
+            task = heapq.heappop(self.tasks)
+            task.assigned_staff = staff_member
+            print(f"Task '{task.task_name}' assigned to {staff_member}.")
+        else:
+            print("No tasks available.")
 
-    def shortest_path(self, start, destination):
-        """
-        Uses Dijkstra's Algorithm to find the shortest path between two hotel locations.
-        """
-        queue = [(0, start)]  # Priority queue initialized with the start point
-        distances = {location: float('inf') for location in self.graph}  # Infinite distance initially
-        distances[start] = 0
-        visited = set()
-
-        while queue:
-            current_cost, current_location = heapq.heappop(queue)
-
-            if current_location in visited:
-                continue
-            visited.add(current_location)
-
-            if current_location == destination:
-                print(f"Shortest path from {start} to {destination} is {current_cost}")
-                return current_cost
-
-            for neighbor, route_cost in self.graph[current_location]:
-                new_cost = current_cost + route_cost
-                if new_cost < distances[neighbor]:
-                    distances[neighbor] = new_cost
-                    heapq.heappush(queue, (new_cost, neighbor))
-
-        print(f"No path found from {start} to {destination}")
-        return float('inf')
+    def view_tasks(self):
+        for task in self.tasks:
+            print(f"Task: {task.task_name}, Priority: {task.priority}, Assigned to: {task.assigned_staff}")
